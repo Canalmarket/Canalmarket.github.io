@@ -1,0 +1,3 @@
+# Canal est un outil personnel : l'adresse est publique, mais rien n'a à être indexé.
+User-agent: *
+Disallow: /
