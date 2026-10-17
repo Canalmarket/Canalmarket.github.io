@@ -11398,8 +11398,9 @@ const esc = s => s.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "
 const ACTU = typeof ACTUS === "object" && ACTUS && ACTUS.valeurs ? ACTUS : { maj: null, valeurs: {} };
 const ACTU_JOURS = 60; // au-delà, une nouvelle n'éclaire plus le cours du jour
 // Entrées et sorties des listes d'alerte, tenues par build.mjs d'une construction à l'autre.
-// Une entrée dans les opportunités est la nouvelle la plus importante que Canal puisse donner :
-// elle passe donc en tête des actualités. La page se construit sans le fichier, sans rien afficher.
+// Elles prennent place dans le fil des actualités, à leur date, comme n'importe quelle nouvelle
+// (choix de l'utilisateur, 17/10/2026 : regroupées en tête, elles faisaient écran aux actualités
+// d'entreprise). La page se construit sans le fichier, sans rien afficher.
 const MOUV = typeof MOUVEMENTS === "object" && MOUVEMENTS && Array.isArray(MOUVEMENTS.items)
   ? MOUVEMENTS : { debut: null, maj: null, items: [] };
 const SENS_MOUV = {
@@ -11415,8 +11416,6 @@ function mouvementsOpp(id) {
     .filter(m => !id || m.id === id)
     .sort((a, b) => b.date.localeCompare(a.date));
 }
-// Vrai tant que le journal est trop jeune pour qu'une absence de mouvement veuille dire quelque chose.
-const journalJeune = () => MOUV.debut && toTime(LAST_DATE) - toTime(MOUV.debut) < ACTU_JOURS * DAY;
 // Ce que veut dire une entrée ou une sortie, en clair. Le même texte sert dans la fiche et
 // dans le fil d'actualités : deux formulations différentes diraient la même chose deux fois.
 const MOUV_TEXTE = {
@@ -11466,11 +11465,11 @@ function actuLine(id, it, avecNom) {
 }
 
 // Une entrée ou une sortie des opportunités, au format détaillé du fil d'actualités.
-function mouvLine(m) {
+function mouvLine(m, avecNom = true) {
   const s = SENS_MOUV[m.sens];
   return `<article class="actu fort">
     <div class="actu-head">
-      <button class="actu-co" data-go="${m.id}">${esc(m.nom)}</button>
+      ${avecNom ? `<button class="actu-co" data-go="${m.id}">${esc(m.nom)}</button>` : ""}
       <span class="actu-sens" style="color:${s.color}">${m.sens === "entree" ? "Entrée dans les opportunités" : "Sortie des opportunités"}</span>
       <span class="actu-date">${fmtDate(m.date)}</span>
     </div>
@@ -11580,16 +11579,21 @@ function viewDash() {
   };
 
   // Actualités : seules les nouvelles à fort impact remontent au tableau de bord, les autres
-  // restent dans la fiche de leur entreprise. Les révisions de note proposées passent en tête.
+  // restent dans la fiche de leur entreprise. Les entrées et sorties des opportunités s'y mêlent à
+  // leur date. Les révisions de note proposées passent en tête.
   const feed = [], revisions = [];
   let total = 0; // tout ce que contient l'onglet Actualités : fort et moyen impact, puis les mouvements
   for (const id of IDS) {
     const a = actusOf(id);
     total += a.items.length;
-    for (const it of a.items) if (it.impact === "fort") feed.push({ id, it });
+    for (const it of a.items) if (it.impact === "fort") feed.push({ date: it.date, id, it });
     if (a.revision) revisions.push({ id, rev: a.revision });
   }
-  feed.sort((x, y) => y.it.date.localeCompare(x.it.date));
+  const mouv = mouvementsOpp();
+  total += mouv.length;
+  for (const m of mouv) feed.push({ date: m.date, id: m.id, mouv: m });
+  // À date égale, l'entrée ou la sortie d'une opportunité passe devant : c'est Canal qui la dit.
+  feed.sort((x, y) => y.date.localeCompare(x.date) || !!y.mouv - !!x.mouv);
   // Six lignes au plus : le tableau de bord donne un aperçu, pas la liste complète. Sur un
   // téléphone chaque ligne s'empile sur trois niveaux, et au-delà le bloc cesse d'être bref.
   const montre = feed.slice(0, 6);
@@ -11606,8 +11610,6 @@ function viewDash() {
     </button>`;
   };
   // Entrées et sorties des opportunités : la ligne dit ce qui a changé et ouvre la fiche.
-  const mouv = mouvementsOpp();
-  total += mouv.length;
   const breveMouv = m => {
     const s = SENS_MOUV[m.sens];
     return `<button class="actu-ligne" data-go="${m.id}" aria-label="${esc(m.nom)} ${s.mot} le ${fmtDate(m.date)} — ouvrir la fiche">
@@ -11654,10 +11656,8 @@ function viewDash() {
   const actuSection = !ACTU.maj && !MOUV.maj ? "" : `<section>
     <div class="sec-head"><h2>Actualités</h2><p>${ACTU.maj ? `Relevé du ${fmtDate(ACTU.maj, true)} · ` : ""}cliquez une ligne pour ouvrir la fiche</p></div>
     <div class="panel actus-brefs">
-      ${mouv.map(breveMouv).join("")}
       ${revisions.map(breveRev).join("")}
-      ${montre.map(breve).join("")}
-      ${!mouv.length && MOUV.maj ? `<p class="fine">Aucune entrée ni sortie de la liste des opportunités ces ${ACTU_JOURS} derniers jours${journalJeune() ? ` (le suivi des mouvements a commencé le ${fmtDate(MOUV.debut)})` : ""}.</p>` : ""}
+      ${montre.map(x => x.mouv ? breveMouv(x.mouv) : breve(x)).join("")}
       ${!montre.length && !revisions.length && ACTU.maj ? `<p class="empty">Rien de marquant sur les valeurs suivies ces ${ACTU_JOURS} derniers jours.</p>` : ""}
       ${total ? `<button class="lien-tout" data-view="actus">Voir toutes les actualités (${total}) →</button>` : ""}
     </div>
@@ -11779,7 +11779,7 @@ function viewActus() {
     ${fil.length
       ? `<div class="panel actus">${fil.map(x => x.mouv ? mouvLine(x.mouv) : actuLine(x.id, x.it, true)).join("")}</div>`
       : `<p class="empty">${ACTU.maj ? `Rien n'a été relevé ces ${ACTU_JOURS} derniers jours.` : "La veille d'actualités n'a pas encore tourné : le fil se remplira au prochain passage."}</p>`}
-    <p class="fine">La veille travaille sur des titres et des extraits de recherche, pas sur les articles eux-mêmes : une nouvelle est un point de départ, à vérifier avant toute décision. Au-delà de ${ACTU_JOURS} jours, une nouvelle n'éclaire plus le cours du jour et disparaît du fil.</p>
+    <p class="fine">La veille est rédigée automatiquement à partir de la presse : une nouvelle est un point de départ, à vérifier avant toute décision. Au-delà de ${ACTU_JOURS} jours, une nouvelle n'éclaire plus le cours du jour et disparaît du fil.</p>
   </section>`;
 }
 
@@ -11861,6 +11861,8 @@ function card(x) {
 function viewFiche(id) {
   const c = COMPANIES[id], m = MODEL[id], k = classify(id), r = reasons(id), actu = actusOf(id);
   const mouvFiche = mouvementsOpp(id);
+  const filFiche = [...actu.items.map(it => ({ date: it.date, it })), ...mouvFiche.map(m => ({ date: m.date, mouv: m }))]
+    .sort((a, b) => b.date.localeCompare(a.date) || !!b.mouv - !!a.mouv);
   const idx = IDS.indexOf(id), prev = IDS[(idx - 1 + IDS.length) % IDS.length], next = IDS[(idx + 1) % IDS.length];
   const opts = g => IDS.filter(i => COMPANIES[i].group === g).map(i => `<option value="${i}"${i === id ? " selected" : ""}>${COMPANIES[i].name}</option>`).join("");
   const nav = `<div class="fiche-nav">
@@ -11912,10 +11914,8 @@ function viewFiche(id) {
 
   ${actu.items.length || actu.revision || mouvFiche.length ? `<section>
     <div class="sec-head"><h2>Ce qui s'est passé récemment</h2><p>${actu.verifie ? `Relevé le ${fmtDate(actu.verifie, true)} · ` : ""}${ACTU_JOURS} derniers jours</p></div>
-    ${mouvFiche.map(m => `<div class="note"><b>${fmtDate(m.date, true)} : ${esc(m.nom)} ${SENS_MOUV[m.sens].mot}.</b>
-      <p>${MOUV_TEXTE[m.sens]}</p></div>`).join("")}
     ${actuRevision(id, actu.revision, false)}
-    ${actu.items.length ? `<div class="panel actus">${actu.items.map(it => actuLine(id, it, false)).join("")}</div>` : ""}
+    ${filFiche.length ? `<div class="panel actus">${filFiche.map(x => x.mouv ? mouvLine(x.mouv, false) : actuLine(id, x.it, false)).join("")}</div>` : ""}
   </section>` : ""}
 
   <section>
